@@ -20,6 +20,9 @@ def login(username: str, password: str) -> bool:
 
 
 def logout():
+    user = current_user()
+    if user:
+        log_action(user["id"], "logout", details={"username": user["username"]})
     st.session_state.pop("user", None)
     st.rerun()
 
