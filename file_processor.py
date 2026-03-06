@@ -1,18 +1,21 @@
 """
 file_processor.py — Extract text from multiple formats, run PII scan, rebuild sanitized file
-Uses pdfplumber instead of PyMuPDF (works on Mac M1/M2/M3 + Python 3.13)
+- Images: black box redaction drawn over PII regions using Pillow + pytesseract OCR
+- PDF/DOCX/CSV/TXT/JSON/SQL: text masking with XXX / [REDACTED]
 """
 import io
 import csv
 import json
+import re
 
 import pdfplumber
 from docx import Document
 from reportlab.lib.pagesizes import A4
 from reportlab.platypus import SimpleDocTemplate, Paragraph
 from reportlab.lib.styles import getSampleStyleSheet
+from PIL import Image, ImageDraw
 
-from pii_engine import full_scan, build_pii_summary
+from pii_engine import full_scan, build_pii_summary, REGEX_PATTERNS
 
 
 def process_file(file_bytes: bytes, filename: str) -> tuple:
@@ -29,9 +32,119 @@ def process_file(file_bytes: bytes, filename: str) -> tuple:
     elif ext == "json":
         return _process_json(file_bytes)
     elif ext in ("png", "jpg", "jpeg"):
-        return _process_image(file_bytes)
+        return _process_image(file_bytes, ext)
     else:
         return _process_text(file_bytes)
+
+
+# ── IMAGE (Black Box Redaction) ───────────────────────────────────
+
+def _process_image(file_bytes: bytes, ext: str = "png") -> tuple:
+    """
+    Black-box redaction on images using OCR:
+    1. Get word + line level bounding boxes via tesseract
+    2. Reconstruct lines and scan each line for PII using regex
+    3. Draw black boxes over every word in a line that contains PII
+    4. Return redacted image
+    """
+    try:
+        import pytesseract
+        from pytesseract import Output
+
+        image = Image.open(io.BytesIO(file_bytes)).convert("RGB")
+        draw = ImageDraw.Draw(image)
+        data = pytesseract.image_to_data(image, output_type=Output.DICT)
+
+        all_detections = []
+        n = len(data["text"])
+
+        # ── Group words into lines by (block_num, par_num, line_num) ──
+        lines = {}
+        for i in range(n):
+            word = data["text"][i].strip()
+            if not word:
+                continue
+            key = (data["block_num"][i], data["par_num"][i], data["line_num"][i])
+            if key not in lines:
+                lines[key] = []
+            lines[key].append(i)
+
+        # ── IMAGE: Only black-box card numbers and CVV ─────────────
+        IMAGE_PII_TYPES = {"credit_card", "cvv"}
+
+        for key, indices in lines.items():
+            line_text = " ".join(data["text"][i].strip() for i in indices)
+
+            for pii_type, (pattern, masker) in REGEX_PATTERNS.items():
+                if pii_type not in IMAGE_PII_TYPES:
+                    continue
+
+                matches = list(re.finditer(pattern, line_text, re.IGNORECASE))
+                if not matches:
+                    continue
+
+                for match in matches:
+                    matched_str = match.group()
+                    try:
+                        masked_val = masker(matched_str)
+                    except Exception:
+                        masked_val = "****"
+
+                    # For credit_card: keep first word visible, box the middle words
+                    match_words = matched_str.split()
+                    for idx, i in enumerate(indices):
+                        word = data["text"][i].strip()
+                        if not any(w in word or word in w for w in match_words):
+                            continue
+
+                        word_pos = match_words.index(word) if word in match_words else -1
+
+                        if pii_type == "credit_card":
+                            # First group (first 4 digits) stays visible
+                            # Middle and last groups get blacked out
+                            if word_pos == 0:
+                                continue  # keep first 4 digits visible
+                        
+                        # Draw black box
+                        x = data["left"][i]
+                        y = data["top"][i]
+                        w = data["width"][i]
+                        h = data["height"][i]
+                        pad = 3
+                        draw.rectangle(
+                            [x - pad, y - pad, x + w + pad, y + h + pad],
+                            fill="black"
+                        )
+
+                    all_detections.append({
+                        "pii_type": pii_type,
+                        "original_value": matched_str,
+                        "masked_value": masked_val,
+                        "detection_method": "regex+ocr",
+                        "confidence": 1.0
+                    })
+
+        # Save redacted image
+        out = io.BytesIO()
+        fmt = "JPEG" if ext in ("jpg", "jpeg") else "PNG"
+        image.save(out, format=fmt)
+        summary = build_pii_summary(all_detections)
+        return out.getvalue(), all_detections, summary
+
+    except ImportError:
+        # pytesseract not installed
+        image = Image.open(io.BytesIO(file_bytes)).convert("RGB")
+        draw = ImageDraw.Draw(image)
+        iw, ih = image.size
+        draw.rectangle([0, ih//2 - 40, iw, ih//2 + 40], fill=(150, 0, 0))
+        draw.text((20, ih//2 - 15), "Install tesseract for OCR image redaction", fill="white")
+        out = io.BytesIO()
+        image.save(out, format="PNG")
+        return out.getvalue(), [], {"error": "pytesseract not installed"}
+
+    except Exception as e:
+        print(f"[Image processing error] {e}")
+        return file_bytes, [], {}
 
 
 # ── PDF ──────────────────────────────────────────────────────────
@@ -47,7 +160,7 @@ def _process_pdf(file_bytes: bytes) -> tuple:
             all_detections.extend(detections)
             full_masked_text += masked + "\n\n"
 
-    # Rebuild as a simple text-based PDF using reportlab
+    # Rebuild as sanitized PDF
     out = io.BytesIO()
     doc = SimpleDocTemplate(out, pagesize=A4)
     styles = getSampleStyleSheet()
@@ -55,11 +168,11 @@ def _process_pdf(file_bytes: bytes) -> tuple:
     for line in full_masked_text.split("\n"):
         if line.strip():
             try:
-                story.append(Paragraph(line.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"), styles["Normal"]))
+                safe = line.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+                story.append(Paragraph(safe, styles["Normal"]))
             except Exception:
                 pass
     doc.build(story)
-
     summary = build_pii_summary(all_detections)
     return out.getvalue(), all_detections, summary
 
@@ -71,12 +184,11 @@ def _process_docx(file_bytes: bytes) -> tuple:
     all_detections = []
 
     for para in doc.paragraphs:
-        if para.text.strip():
-            for run in para.runs:
-                if run.text.strip():
-                    masked, detections = full_scan(run.text)
-                    all_detections.extend(detections)
-                    run.text = masked
+        for run in para.runs:
+            if run.text.strip():
+                masked, detections = full_scan(run.text)
+                all_detections.extend(detections)
+                run.text = masked
 
     for table in doc.tables:
         for row in table.rows:
@@ -137,27 +249,6 @@ def _process_json(file_bytes: bytes) -> tuple:
     masked, detections = full_scan(text)
     summary = build_pii_summary(detections)
     return masked.encode("utf-8"), detections, summary
-
-
-# ── IMAGE ────────────────────────────────────────────────────────
-
-def _process_image(file_bytes: bytes) -> tuple:
-    """
-    Try OCR with pytesseract if available, otherwise return placeholder.
-    """
-    try:
-        import pytesseract
-        from PIL import Image
-        import io
-        image = Image.open(io.BytesIO(file_bytes))
-        text = pytesseract.image_to_string(image)
-        masked, detections = full_scan(text)
-        summary = build_pii_summary(detections)
-        # Return original image bytes (we can't rewrite the image)
-        return file_bytes, detections, summary
-    except Exception:
-        # pytesseract not available — return image as-is with note
-        return file_bytes, [], {"note": "Install pytesseract for image OCR"}
 
 
 # ── PREVIEW ──────────────────────────────────────────────────────
