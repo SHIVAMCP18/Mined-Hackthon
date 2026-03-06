@@ -67,7 +67,19 @@ REGEX_PATTERNS = {
     ),
     "credit_card": (
         r"\b(?:\d{4}[\s\-]?){3}\d{4}\b",
-        lambda m: "XXXX XXXX XXXX " + m.replace(" ", "").replace("-", "")[-4:]
+        lambda m: m.replace(" ", "").replace("-", "")[:4] + " **** **** " + m.replace(" ", "").replace("-", "")[-4:]
+    ),
+    "cvv": (
+        r"\b\d{3,4}\b",
+        lambda m: "*" * len(m)
+    ),
+    "us_phone": (
+        r"\b(?:\+1[\s\-]?)?\(?\d{3}\)?[\s\-]?\d{3}[\s\-]?\d{4}\b",
+        lambda m: "***-***-" + m.replace(" ", "").replace("-", "")[-4:]
+    ),
+    "expiry_date": (
+        r"\b(0[1-9]|1[0-2])/([0-9]{2,4})\b",
+        lambda m: "**/" + m.split("/")[1]
     ),
 }
 
