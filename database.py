@@ -80,6 +80,17 @@ def get_all_files():
     return files
 
 
+def get_files_by_user(user_id: str) -> list:
+    """Get only files uploaded by a specific user."""
+    sb = get_client()
+    res = sb.table("files").select("*, users!files_uploaded_by_fkey(username)").eq("uploaded_by", user_id).order("upload_time", desc=True).execute()
+    rows = res.data or []
+    for r in rows:
+        r["uploader"] = (r.get("users") or {}).get("username", "unknown")
+        r.pop("users", None)
+    return rows
+
+
 def get_file_by_id(file_id):
     sb = get_client()
     res = sb.table("files").select("*").eq("id", file_id).execute()
@@ -120,6 +131,21 @@ def log_action(user_id, action, file_id=None, details=None, ip_address=None):
         "details": details or {},
         "ip_address": ip_address
     }).execute()
+
+
+def get_user_activity(user_id: str, limit: int = 200) -> list:
+    """Get all audit logs for a specific user including login/logout times."""
+    sb = get_client()
+    res = sb.table("audit_logs").select(
+        "*, files(original_filename)"
+    ).eq("user_id", user_id).order("timestamp", desc=True).limit(limit).execute()
+
+    logs = []
+    for log in (res.data or []):
+        log["original_filename"] = (log.get("files") or {}).get("original_filename", "")
+        log.pop("files", None)
+        logs.append(log)
+    return logs
 
 
 def get_audit_logs(limit=100):
