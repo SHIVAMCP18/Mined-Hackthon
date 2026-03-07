@@ -504,13 +504,11 @@ def page_upload():
         if st.button("🚀 Run PII Detection & Sanitize", use_container_width=True):
             # ── Step 1: Security Scan ─────────────────────────────
             security_result = full_security_scan(file_bytes, uploaded.name)
-            vt = security_result["virustotal"]
             is_malicious_content = not security_result["malicious_content"]["safe"]
-            is_malicious_vt = vt.get("checked") and vt.get("malicious")
 
             # Always show security report
             st.markdown('<div class="section-header">🔒 Security Scan Results</div>', unsafe_allow_html=True)
-            col_s1, col_s2, col_s3 = st.columns(3)
+            col_s1, col_s2 = st.columns(2)
             with col_s1:
                 if security_result["safe"]:
                     st.success("✅ File is Safe")
@@ -518,16 +516,6 @@ def page_upload():
                     st.error("🚨 Threats Detected!")
             with col_s2:
                 st.info("**SHA256:** `" + security_result['hashes']['sha256'][:24] + "...`")
-            with col_s3:
-                if vt.get("checked"):
-                    if is_malicious_vt:
-                        st.error("🦠 VirusTotal: MALICIOUS")
-                    else:
-                        st.success("✅ VirusTotal: Clean")
-                    if vt.get("link"):
-                        st.markdown(f"[View on VirusTotal ↗]({vt['link']})")
-                else:
-                    st.warning(f"⚠️ VirusTotal: {vt.get('reason', 'Not checked')}")
 
             # BLOCK if malicious
             if is_malicious_content:
@@ -542,17 +530,9 @@ def page_upload():
                 })
                 st.stop()
 
-            if is_malicious_vt:
-                st.error("⛔ **UPLOAD BLOCKED** — VirusTotal flagged this file as malicious.")
-                log_action(current_user()["id"], "blocked_upload_virustotal", details={
-                    "filename": uploaded.name,
-                    "sha256": security_result["hashes"]["sha256"]
-                })
-                st.stop()
-
             st.success("✅ Security scan passed — proceeding with PII detection.")
 
-            with st.spinner("Scanning for PII (Regex + Gemini AI)..."):
+            with st.spinner("Scanning for PII..."):
                 try:
                     user = current_user()
                     file_id = str(uuid.uuid4())
@@ -749,7 +729,7 @@ def page_users():
             action_icons = {
                 "login": "🟢", "logout": "🔴", "upload": "⬆️",
                 "download": "⬇️", "text_scan": "🔍", "view": "👁️",
-                "blocked_upload": "⛔", "blocked_upload_virustotal": "🦠",
+                "blocked_upload": "⛔",
                 "pii_detected": "🔐"
             }
             for a in activity[:50]:
@@ -871,12 +851,10 @@ IP Address: 103.54.12.77, Device: android-9f31acb8d1"""
     )
 
     # Options row
-    col_o1, col_o2, col_o3 = st.columns(3)
+    col_o1, col_o2 = st.columns(2)
     with col_o1:
-        use_gemini = st.checkbox("🤖 Use Gemini AI", value=True, help="Detect names and addresses using Gemini")
-    with col_o2:
         show_highlight = st.checkbox("🎨 Highlight PII", value=True, help="Show detected PII highlighted")
-    with col_o3:
+    with col_o2:
         mask_mode = st.selectbox("Mask Mode", ["Partial (j***@email.com)", "Full Redact ([REDACTED])", "Token (PII_TOKEN_1)"], label_visibility="collapsed")
 
     if st.button("🔍 Scan & Mask PII", use_container_width=True, disabled=not input_text.strip()):
@@ -885,19 +863,15 @@ IP Address: 103.54.12.77, Device: android-9f31acb8d1"""
             return
 
         with st.spinner("Scanning for PII..."):
-            from pii_engine import regex_scan, gemini_scan, build_pii_summary
+            from pii_engine import regex_scan, name_address_scan, build_pii_summary
 
             # Run regex scan
             after_regex, regex_detections = regex_scan(input_text)
             regex_types = list({d["pii_type"] for d in regex_detections})
 
-            # Run Gemini scan if enabled
-            if use_gemini:
-                masked_text, gemini_detections = gemini_scan(after_regex, already_masked_types=regex_types)
-                all_detections = regex_detections + gemini_detections
-            else:
-                masked_text = after_regex
-                all_detections = regex_detections
+            # Run name/address pattern scan
+            masked_text, pattern_detections = name_address_scan(after_regex)
+            all_detections = regex_detections + pattern_detections
 
             # Apply token mode if selected
             if "Token" in mask_mode:
@@ -927,8 +901,8 @@ IP Address: 103.54.12.77, Device: android-9f31acb8d1"""
         with c2:
             st.markdown(f'<div class="metric-card"><div class="metric-number">{len(regex_detections)}</div><div class="metric-label">Via Regex</div></div>', unsafe_allow_html=True)
         with c3:
-            gemini_count = len(all_detections) - len(regex_detections)
-            st.markdown(f'<div class="metric-card"><div class="metric-number">{gemini_count}</div><div class="metric-label">Via Gemini</div></div>', unsafe_allow_html=True)
+            pattern_count = len(all_detections) - len(regex_detections)
+            st.markdown(f'<div class="metric-card"><div class="metric-number">{pattern_count}</div><div class="metric-label">Via Pattern</div></div>', unsafe_allow_html=True)
         with c4:
             st.markdown(f'<div class="metric-card"><div class="metric-number">{len(summary)}</div><div class="metric-label">PII Types</div></div>', unsafe_allow_html=True)
 
