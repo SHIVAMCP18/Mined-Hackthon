@@ -8,7 +8,7 @@ This is our submission for **Nirma HACKaMINeD 2026**.
 
 ## Overview
 
-PII Sanitizer is a secure document sanitization platform built for environments where sensitive data must be protected before storage, sharing, or downstream usage.
+ShieldGate is a secure document sanitization platform built for environments where sensitive data must be protected before storage, sharing, or downstream usage.
 
 The system supports end-to-end sanitization of documents containing synthetic PII by combining:
 
