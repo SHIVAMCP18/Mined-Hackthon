@@ -1,4 +1,4 @@
-# PII Sanitizer
+# ShieldGate - PII Sanitizer
 
 This is our submission for **Nirma HACKaMINeD 2026**.
 
