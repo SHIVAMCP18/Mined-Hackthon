@@ -148,6 +148,26 @@ def get_user_activity(user_id: str, limit: int = 200) -> list:
     return logs
 
 
+def delete_file_record(file_id: str):
+    """Delete file and related records from DB (admin only)."""
+    sb = get_client()
+    sb.table("pii_detections").delete().eq("file_id", file_id).execute()
+    sb.table("audit_logs").delete().eq("file_id", file_id).execute()
+    sb.table("files").delete().eq("id", file_id).execute()
+
+
+def get_pii_summary_all():
+    """Aggregate PII type counts across all files from pii_summary JSONB."""
+    sb = get_client()
+    res = sb.table("files").select("pii_summary").eq("status", "done").execute()
+    totals = {}
+    for row in (res.data or []):
+        summary = row.get("pii_summary") or {}
+        for pii_type, count in summary.items():
+            totals[pii_type] = totals.get(pii_type, 0) + (count or 0)
+    return totals
+
+
 def get_audit_logs(limit=100):
     sb = get_client()
     res = sb.table("audit_logs").select(
