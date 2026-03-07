@@ -19,7 +19,7 @@ The system supports end-to-end sanitization of documents containing synthetic PI
 - **Security checks before upload**
 - **Audit logging for every critical action**
 
-Admins can upload sensitive files, scan and sanitize them, review detections, and manage users. Standard users can only access sanitized outputs.
+Admins can upload sensitive files, scan and sanitize them, review detections, and manage users. Standard users can only access their uploaded sensitive files and sanitized outputs.
 
 ---
 
@@ -116,7 +116,9 @@ authentication → upload → validation → scan → sanitize → store → rev
   - Review audit logs
   - Manage users
 - **Standard User**
-  - Access only sanitized outputs
+  - Upload and scan files
+  - View detailed detections
+  - Access only original and sanitized files they uploaded
 
 ### Security Controls
 - File validation before processing
