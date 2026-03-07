@@ -29,7 +29,11 @@ Admins can upload sensitive files, scan and sanitize them, review detections, an
 
 ### Admin Dashboard
 <p align="center">
-  <img src="./assets/screenshots/admin-dashboard.png" alt="Admin Dashboard" width="85%" />
+  <img src="./assets/screenshots/admin-dashboard1.png" alt="Admin Dashboard" width="85%" />
+</p>
+
+<p align="center">
+  <img src="./assets/screenshots/admin-dashboard2.png" alt="Admin Dashboard" width="85%" />
 </p>
 
 ### Upload & PII Detection
@@ -215,7 +219,6 @@ Create a .env file in the root directory:
 ```env
 SUPABASE_URL=your_supabase_url
 SUPABASE_KEY=your_supabase_key
-VIRUSTOTAL_API_KEY=your_virustotal_api_key
 ```
 
 ### 5. Run the app
