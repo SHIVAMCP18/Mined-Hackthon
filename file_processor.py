@@ -69,8 +69,8 @@ def _process_image(file_bytes: bytes, ext: str = "png") -> tuple:
                 lines[key] = []
             lines[key].append(i)
 
-        # ── IMAGE: Only black-box card numbers and CVV ─────────────
-        IMAGE_PII_TYPES = {"credit_card", "cvv"}
+        # ── IMAGE: Only black-box phone, card, email, cvv ──────────
+        IMAGE_PII_TYPES = {"credit_card", "cvv", "phone", "us_phone", "email"}
 
         for key, indices in lines.items():
             line_text = " ".join(data["text"][i].strip() for i in indices)
@@ -90,31 +90,56 @@ def _process_image(file_bytes: bytes, ext: str = "png") -> tuple:
                     except Exception:
                         masked_val = "****"
 
-                    # For credit_card: keep first word visible, box the middle words
-                    match_words = matched_str.split()
-                    for idx, i in enumerate(indices):
+                    # Find exact character positions of match in line_text
+                    # and only box words that overlap with those positions
+                    match_start = match.start()
+                    match_end = match.end()
+
+                    # Rebuild word positions in line_text
+                    pos = 0
+                    word_positions = []
+                    for i in indices:
                         word = data["text"][i].strip()
-                        if not any(w in word or word in w for w in match_words):
+                        if not word:
+                            word_positions.append((i, -1, -1))
+                            continue
+                        word_start = line_text.find(word, pos)
+                        word_end = word_start + len(word) if word_start >= 0 else -1
+                        word_positions.append((i, word_start, word_end))
+                        if word_start >= 0:
+                            pos = word_start + len(word)
+
+                    for word_idx, (i, wstart, wend) in enumerate(word_positions):
+                        if wstart < 0 or wend < 0:
+                            continue
+                        # Only box if this word overlaps with the regex match
+                        if wend <= match_start or wstart >= match_end:
                             continue
 
-                        word_pos = match_words.index(word) if word in match_words else -1
+                        word = data["text"][i].strip()
 
-                        if pii_type == "credit_card":
-                            # First group (first 4 digits) stays visible
-                            # Middle and last groups get blacked out
-                            if word_pos == 0:
-                                continue  # keep first 4 digits visible
-                        
-                        # Draw black box
+                        # credit_card: keep first group (first 4 digits) visible
+                        if pii_type == "credit_card" and wstart == match_start:
+                            continue
+
+                        # phone: keep country code visible
+                        if pii_type in ("phone", "us_phone"):
+                            if word.startswith("+") or word in ("+91", "+1"):
+                                continue
+
+                        # email: keep @domain part visible
+                        if pii_type == "email":
+                            at_pos = matched_str.find("@")
+                            if at_pos >= 0 and wstart >= match_start + at_pos:
+                                continue
+
                         x = data["left"][i]
                         y = data["top"][i]
                         w = data["width"][i]
                         h = data["height"][i]
-                        pad = 3
-                        draw.rectangle(
-                            [x - pad, y - pad, x + w + pad, y + h + pad],
-                            fill="black"
-                        )
+                        draw.rectangle([x-3, y-3, x+w+3, y+h+3], fill="black")
+
+
 
                     all_detections.append({
                         "pii_type": pii_type,
