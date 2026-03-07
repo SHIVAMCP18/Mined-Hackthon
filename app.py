@@ -14,7 +14,7 @@ from database import (
     get_files_by_user,
     get_user_activity, get_file_by_id, create_file_record, update_file_record,
     save_pii_detections, get_pii_detections, get_audit_logs, log_action,
-    get_all_users, create_user
+    get_all_users, create_user, get_pii_summary_all, delete_file_record
 )
 from storage import upload_file, download_file, get_presigned_url, get_content_type
 from file_processor import process_file, extract_preview_text
@@ -260,6 +260,38 @@ def page_dashboard():
         processing = len([f for f in files if f["status"] == "processing"])
         st.markdown(f'<div class="metric-card"><div class="metric-number">{processing}</div><div class="metric-label">Processing</div></div>', unsafe_allow_html=True)
 
+    # ── PII BREAKDOWN CHART ───────────────────────────────────────
+    if done_files:
+        st.markdown('<div class="section-header">📊 PII Type Breakdown</div>', unsafe_allow_html=True)
+
+        # Aggregate pii_summary across all done files
+        pii_totals = {}
+        for f in done_files:
+            summary = f.get("pii_summary") or {}
+            for pii_type, count in summary.items():
+                if pii_type not in ["sql_injection", "xss", "shell_commands", "path_traversal"]:
+                    pii_totals[pii_type] = pii_totals.get(pii_type, 0) + (count or 0)
+
+        if pii_totals:
+            chart_df = pd.DataFrame(
+                sorted(pii_totals.items(), key=lambda x: x[1], reverse=True),
+                columns=["PII Type", "Count"]
+            )
+
+            col_chart1, col_chart2 = st.columns([3, 2])
+            with col_chart1:
+                st.bar_chart(chart_df.set_index("PII Type"), color="#ff3b64", height=280)
+            with col_chart2:
+                # Summary table
+                st.dataframe(
+                    chart_df,
+                    use_container_width=True,
+                    hide_index=True,
+                    height=280
+                )
+        else:
+            st.info("No PII breakdown data available yet.")
+
     st.markdown('<div class="section-header">Recent Files</div>', unsafe_allow_html=True)
 
     if not files:
@@ -445,9 +477,83 @@ def page_files():
     # ── File list view ────────────────────────────────────────────
     st.markdown('<div class="section-header">All Sanitized Files</div>', unsafe_allow_html=True)
 
-    for f in done_files:
+    # ── SEARCH & FILTER ───────────────────────────────────────────
+    with st.expander("🔍 Search & Filter", expanded=True):
+        col_f1, col_f2, col_f3, col_f4 = st.columns([3, 2, 2, 2])
+        with col_f1:
+            search_query = st.text_input("Search filename", placeholder="e.g. report.pdf", label_visibility="collapsed")
+        with col_f2:
+            file_types = sorted(set(f["file_type"].lower() for f in done_files))
+            type_filter = st.selectbox("File type", ["All types"] + file_types, label_visibility="collapsed")
+        with col_f3:
+            pii_filter = st.selectbox("PII count", ["Any amount", "0 PII", "1-10 PII", "11-50 PII", "50+ PII"], label_visibility="collapsed")
+        with col_f4:
+            date_filter = st.selectbox("Date", ["All time", "Today", "Last 7 days", "Last 30 days"], label_visibility="collapsed")
+
+    # Apply filters
+    from datetime import timezone, timedelta
+    now = datetime.now(timezone.utc)
+
+    filtered_files = done_files
+    if search_query:
+        filtered_files = [f for f in filtered_files if search_query.lower() in f["original_filename"].lower()]
+    if type_filter != "All types":
+        filtered_files = [f for f in filtered_files if f["file_type"].lower() == type_filter]
+    if pii_filter == "0 PII":
+        filtered_files = [f for f in filtered_files if (f["pii_count"] or 0) == 0]
+    elif pii_filter == "1-10 PII":
+        filtered_files = [f for f in filtered_files if 1 <= (f["pii_count"] or 0) <= 10]
+    elif pii_filter == "11-50 PII":
+        filtered_files = [f for f in filtered_files if 11 <= (f["pii_count"] or 0) <= 50]
+    elif pii_filter == "50+ PII":
+        filtered_files = [f for f in filtered_files if (f["pii_count"] or 0) > 50]
+    if date_filter != "All time":
+        cutoff = {
+            "Today": now - timedelta(days=1),
+            "Last 7 days": now - timedelta(days=7),
+            "Last 30 days": now - timedelta(days=30),
+        }[date_filter]
+        def parse_ts(ts):
+            try:
+                if isinstance(ts, str):
+                    ts = ts.replace("Z", "+00:00")
+                    return datetime.fromisoformat(ts)
+                return ts
+            except Exception:
+                return now
+        filtered_files = [f for f in filtered_files if parse_ts(f["upload_time"]) >= cutoff]
+
+    st.caption(f"Showing {len(filtered_files)} of {len(done_files)} files")
+
+    # ── BULK DOWNLOAD ─────────────────────────────────────────────
+    if filtered_files:
+        if st.button("📦 Bulk Download All Filtered Files as ZIP", use_container_width=True):
+            import zipfile, io as _io
+            zip_buffer = _io.BytesIO()
+            with st.spinner(f"Packaging {len(filtered_files)} files..."):
+                with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+                    for f in filtered_files:
+                        if f.get("sanitized_r2_key"):
+                            try:
+                                file_bytes = download_file(f["sanitized_r2_key"])
+                                zf.writestr(f"sanitized_{f['original_filename']}", file_bytes)
+                            except Exception:
+                                pass
+            zip_buffer.seek(0)
+            st.download_button(
+                label=f"⬇️ Download ZIP ({len(filtered_files)} files)",
+                data=zip_buffer.getvalue(),
+                file_name=f"sanitized_files_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip",
+                mime="application/zip",
+                use_container_width=True,
+                key="bulk_zip_dl"
+            )
+
+    st.markdown("<br>", unsafe_allow_html=True)
+
+    for f in filtered_files:
         pii_count = f["pii_count"] or 0
-        col1, col2, col3 = st.columns([4, 1, 1])
+        col1, col2, col3, col4 = st.columns([4, 1, 1, 1]) if is_admin() else st.columns([4, 1, 1])
         with col1:
             st.markdown(f"**📄 {f['original_filename']}**")
             uploader = f" · by **{f['uploader']}**" if is_admin() and f.get("uploader") else ""
@@ -471,6 +577,37 @@ def page_files():
                     )
                 except Exception:
                     st.caption("Unavailable")
+        if is_admin():
+            with col4:
+                if st.button("🗑️", key=f"del_{f['id']}", help="Delete this file (admin only)", use_container_width=True):
+                    st.session_state[f"confirm_del_{f['id']}"] = True
+                    st.rerun()
+
+            # Confirmation row
+            if st.session_state.get(f"confirm_del_{f['id']}"):
+                st.warning(f"⚠️ Delete **{f['original_filename']}**? This cannot be undone.")
+                c_yes, c_no = st.columns(2)
+                with c_yes:
+                    if st.button("✅ Yes, Delete", key=f"yes_{f['id']}", use_container_width=True):
+                        try:
+                            from storage import delete_file as storage_delete
+                            if f.get("sanitized_r2_key"):
+                                try: storage_delete(f["sanitized_r2_key"])
+                                except Exception: pass
+                            if f.get("original_r2_key"):
+                                try: storage_delete(f["original_r2_key"])
+                                except Exception: pass
+                            delete_file_record(str(f["id"]))
+                            log_action(user["id"], "delete", str(f["id"]), {"filename": f["original_filename"]})
+                            st.session_state.pop(f"confirm_del_{f['id']}", None)
+                            st.success(f"✅ Deleted **{f['original_filename']}**")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Delete failed: {e}")
+                with c_no:
+                    if st.button("❌ Cancel", key=f"no_{f['id']}", use_container_width=True):
+                        st.session_state.pop(f"confirm_del_{f['id']}", None)
+                        st.rerun()
         st.divider()
 
 
