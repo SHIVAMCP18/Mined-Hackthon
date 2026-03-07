@@ -13,11 +13,13 @@ ShieldGate is a secure document sanitization platform built for environments whe
 The system supports end-to-end sanitization of documents containing synthetic PII by combining:
 
 - **Regex-based structured PII detection**
-- **NLP-based contextual entity recognition**
-- **OCR-assisted image redaction**
+- **NLP-based and OCR-assisted contextual entity recognition**
 - **Role-based file access**
 - **Security checks before upload**
 - **Audit logging for every critical action**
+- **User activity analytics and file insights**
+- **Session security controls**
+- **Account security monitoring**
 
 Admins can upload sensitive files, scan and sanitize them, review detections, and manage users. Standard users can only access their uploaded sensitive files and sanitized outputs.
 
@@ -119,17 +121,38 @@ authentication → upload → validation → scan → sanitize → store → rev
   - Upload and scan files
   - View detailed detections
   - Access only original and sanitized files they uploaded
+ 
+### Analytics & Monitoring
+- User activity heatmap for platform usage visibility
+- File type breakdown graph for uploaded and sanitized document insights
+- Audit logs for:
+  - Login
+  - Upload
+  - Access
+  - Download
+- Audit logs generated in a structured backend format suitable for SIEM ingestion
+
+### Session & Account Security
+- Automatic session timeout after **30 minutes** of inactivity
+- Password change functionality for users
+- Failed login tracker for suspicious authentication activity
+- Role-based restrictions for sensitive file access
 
 ### Security Controls
 - File validation before processing
 - Suspicious/malicious content filtering before upload
 - File hash generation
 - VirusTotal API-based verification workflow
+- Automatic session timeout after **30 minutes** of inactivity
+- Password change support for account security
+- Failed login tracking for suspicious authentication attempts
 - Audit logs for:
   - Login
+  - Failed login
   - Upload
   - Access
   - Download
+  - Password change
 - Audit logs generated in a structured backend format suitable for SIEM ingestion
 
 ---
@@ -189,7 +212,7 @@ pip install -r requirements.txt
 
 ### 4. Add environment variables
 Create a .env file in the root directory:
-```bash
+```env
 SUPABASE_URL=your_supabase_url
 SUPABASE_KEY=your_supabase_key
 VIRUSTOTAL_API_KEY=your_virustotal_api_key
@@ -212,6 +235,9 @@ This project was built with a security-first approach.
 - Hashes are generated before security verification
 - VirusTotal API is used in the verification workflow
 - Sensitive files are access-controlled through RBAC
+- Automatic session timeout reduces unauthorized access risk
+- Failed login attempts are tracked for suspicious authentication monitoring
+- Password change functionality improves account security hygiene
 - Audit logs are generated for important actions
 - Sanitized files are separated from original sensitive files
 
